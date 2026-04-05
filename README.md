@@ -16,10 +16,10 @@ You can also open the HTML file directly in a browser (API calls will fall back 
 
 ## Autonomous Car Software System (ACSS)
 
-React + Vite + Tailwind in **`autonomous-car-system/`**.
+React + Vite + Tailwind in **`postmortem-report-system/`**.
 
 ```bash
-cd autonomous-car-system
+cd postmortem-report-system
 npm install
 npm run dev
 ```
