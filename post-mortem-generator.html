@@ -1,0 +1,1310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Software Failure Post-Mortem Generator</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --surface: #fff;
+      --border: #e2e5eb;
+      --text: #1a1d26;
+      --muted: #5c6370;
+      --accent: #2d3748;
+      --tab-inactive: #8b919c;
+      --success: #2f855a;
+      --fail: #c53030;
+      --radius: 8px;
+      --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    .wrap {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 1.5rem 1rem 3rem;
+    }
+
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      margin: 0 0 0.25rem;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      font-size: 0.875rem;
+      color: var(--muted);
+      margin-bottom: 1rem;
+    }
+
+    /* AUTO MODE FEATURE — top bar: mode toggle, health badge, scan time */
+    .auto-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem 1rem;
+      margin-bottom: 1.25rem;
+      padding: 0.75rem 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    .auto-toolbar .btn-mode {
+      font-size: 0.8125rem;
+    }
+
+    .system-badge {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 0.35rem 0.65rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+    }
+
+    .system-badge.stable {
+      background: #c6f6d5;
+      color: #22543d;
+      border-color: #9ae6b4;
+    }
+
+    .system-badge.failure {
+      background: #fed7d7;
+      color: #822727;
+      border-color: #fc8181;
+    }
+
+    .system-badge.idle {
+      background: var(--bg);
+      color: var(--muted);
+    }
+
+    .last-scan {
+      font-size: 0.75rem;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+
+    .auto-status {
+      width: 100%;
+      font-size: 0.8125rem;
+      color: var(--muted);
+      margin: 0;
+    }
+
+    .auto-status strong { color: var(--text); }
+
+    /* AUTO MODE FEATURE — mock pipeline timeline (detection → analysis → report) */
+    .auto-mock-timeline {
+      margin-top: 0.75rem;
+      padding: 0.75rem;
+      background: var(--bg);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius);
+      font-size: 0.75rem;
+      display: none;
+    }
+
+    .auto-mock-timeline.visible { display: block; }
+
+    .auto-mock-timeline h4 {
+      margin: 0 0 0.5rem;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+
+    .auto-steps {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem;
+      font-family: var(--mono);
+      color: var(--text);
+    }
+
+    .auto-steps span.sep { color: var(--muted); }
+
+    /* Tab bar */
+    .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 1.25rem;
+    }
+
+    .tab {
+      appearance: none;
+      border: none;
+      background: transparent;
+      padding: 0.65rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--tab-inactive);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .tab:hover { color: var(--text); }
+    .tab[aria-selected="true"] {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* Form */
+    label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+
+    .field { margin-bottom: 1rem; }
+
+    input[type="text"]:disabled,
+    textarea:disabled,
+    select:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+      background: #f0f2f5;
+    }
+
+    input[type="text"],
+    textarea,
+    select {
+      width: 100%;
+      padding: 0.5rem 0.65rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      font-family: var(--font);
+      background: var(--surface);
+      color: var(--text);
+    }
+
+    textarea {
+      min-height: 140px;
+      resize: vertical;
+      font-family: var(--mono);
+      font-size: 0.8125rem;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    @media (max-width: 560px) {
+      .row { grid-template-columns: 1fr; }
+    }
+
+    .samples {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.5rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .btn:hover:not(:disabled) { background: #f0f2f5; }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .btn-primary:hover:not(:disabled) { background: #1a202c; border-color: #1a202c; }
+
+    .btn-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 1rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    /* Report */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+
+    .badge span {
+      font-size: 0.6875rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      background: #edf2f7;
+      color: var(--accent);
+      border: 1px solid var(--border);
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .metric {
+      padding: 0.75rem;
+      background: var(--bg);
+      border-radius: 6px;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 1.125rem;
+      font-family: var(--mono);
+      color: var(--text);
+      margin-top: 0.2rem;
+    }
+
+    .report-section h3 {
+      font-size: 0.6875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin: 1rem 0 0.35rem;
+    }
+
+    .report-section p,
+    .report-section ul {
+      margin: 0;
+      font-size: 0.875rem;
+    }
+
+    .report-section ul {
+      padding-left: 1.25rem;
+    }
+
+    .report-section li { margin-bottom: 0.35rem; }
+
+    .timeline {
+      font-family: var(--mono);
+      font-size: 0.8125rem;
+      white-space: pre-wrap;
+      background: var(--bg);
+      padding: 0.75rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+
+    /* API status: neutral styling; success vs fallback differ only by border weight */
+    .api-note {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.75rem;
+      padding: 0.5rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+
+    .api-note.ok { border-color: var(--accent); }
+
+    /* Tests */
+    .test-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.65rem 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.875rem;
+    }
+
+    .test-row:last-child { border-bottom: none; }
+
+    .pass { color: var(--success); font-weight: 600; font-size: 0.75rem; }
+    .fail { color: var(--fail); font-weight: 600; font-size: 0.75rem; }
+
+    .empty-hint {
+      color: var(--muted);
+      font-size: 0.875rem;
+      padding: 2rem;
+      text-align: center;
+    }
+
+    /* PASTE / CODE AUTO ANALYSIS — hints under log field */
+    .paste-detect-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem 1rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.8125rem;
+      color: var(--muted);
+    }
+
+    .paste-detect-row label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin: 0;
+      text-transform: none;
+      letter-spacing: normal;
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    .paste-detect-row input[type="checkbox"] {
+      width: auto;
+      margin: 0;
+    }
+
+    #pasteDetectStatus {
+      font-size: 0.75rem;
+      color: var(--muted);
+      min-height: 1.25rem;
+      margin-top: 0.35rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Automated Software Failure Post-Mortem</h1>
+    <p class="subtitle">Paste code or logs with errors — failure patterns trigger an automatic post-mortem. Or use Manual Generate, samples, and Auto Mode (server).</p>
+
+    <!-- AUTO MODE FEATURE — mode toggle, health indicator, last poll time -->
+    <div class="auto-toolbar">
+      <button type="button" class="btn btn-mode" id="btnModeToggle" aria-pressed="false">Manual Mode</button>
+      <span id="systemBadge" class="system-badge idle" title="Based on latest log scan">Idle</span>
+      <span class="last-scan" id="lastScanTime">Last scan: —</span>
+      <p class="auto-status" id="autoStatusLine" hidden><strong>Status:</strong> <span id="autoStatusText"></span></p>
+    </div>
+
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab" role="tab" id="tab-input" aria-selected="true" aria-controls="panel-input" data-tab="input">Input</button>
+      <button type="button" class="tab" role="tab" id="tab-report" aria-selected="false" aria-controls="panel-report" data-tab="report">Report</button>
+      <button type="button" class="tab" role="tab" id="tab-tests" aria-selected="false" aria-controls="panel-tests" data-tab="tests">Tests</button>
+    </div>
+
+    <!-- INPUT -->
+    <div id="panel-input" class="panel active" role="tabpanel" aria-labelledby="tab-input">
+      <div class="card">
+        <!-- AUTO MODE FEATURE — start/stop monitoring (only used in Auto Mode) -->
+        <div id="autoControls" class="field" hidden>
+          <label>Auto detection</label>
+          <div class="btn-group" style="margin-top:0">
+            <button type="button" class="btn btn-primary" id="btnStartAuto">Start Auto Detection</button>
+          </div>
+          <!-- AUTO MODE FEATURE — optional mock pipeline after each auto analysis -->
+          <div id="autoMockTimeline" class="auto-mock-timeline" aria-live="polite">
+            <h4>Auto pipeline (mock)</h4>
+            <div class="auto-steps" id="autoSteps"></div>
+          </div>
+        </div>
+
+        <label>Load sample</label>
+        <div class="samples">
+          <button type="button" class="btn" data-sample="null">Null pointer</button>
+          <button type="button" class="btn" data-sample="db">DB config fail</button>
+          <button type="button" class="btn" data-sample="oom">OOM</button>
+        </div>
+
+        <div id="manualFormFields">
+          <div class="row">
+            <div class="field">
+              <label for="bugId">Bug ID</label>
+              <input type="text" id="bugId" placeholder="e.g. INC-2048" />
+            </div>
+            <div class="field">
+              <label for="severity">Severity</label>
+              <select id="severity">
+                <option value="Low">Low</option>
+                <option value="Med">Med</option>
+                <option value="High">High</option>
+                <option value="Crit">Crit</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="description">Description</label>
+            <input type="text" id="description" placeholder="Short summary of the failure" />
+          </div>
+
+          <div class="field">
+            <label for="log">Code / log excerpt</label>
+            <div class="paste-detect-row">
+              <label>
+                <input type="checkbox" id="autoFromPaste" checked />
+                Auto-generate post-mortem when failure patterns are detected
+              </label>
+              <button type="button" class="btn" id="btnAnalyzePaste">Analyze pasted content now</button>
+            </div>
+            <textarea id="log" placeholder="Paste your code, stderr, build output, or stack traces here…"></textarea>
+            <p id="pasteDetectStatus" aria-live="polite"></p>
+          </div>
+
+          <div class="field">
+            <label for="testSummary">Test summary</label>
+            <textarea id="testSummary" rows="4" placeholder="What was tested, what failed, repro steps…"></textarea>
+          </div>
+        </div>
+
+        <div class="btn-group">
+          <button type="button" class="btn btn-primary" id="btnGenerate">Generate report</button>
+        </div>
+        <p id="apiStatus" class="api-note" hidden></p>
+      </div>
+    </div>
+
+    <!-- REPORT -->
+    <div id="panel-report" class="panel" role="tabpanel" aria-labelledby="tab-report" hidden>
+      <div id="reportEmpty" class="card empty-hint">Generate a report from the Input tab first.</div>
+      <div id="reportContent" hidden></div>
+    </div>
+
+    <!-- TESTS -->
+    <div id="panel-tests" class="panel" role="tabpanel" aria-labelledby="tab-tests" hidden>
+      <div class="card">
+        <p style="margin:0 0 1rem; font-size:0.875rem; color:var(--muted);">Inline checks for the rule-based classifier (no network).</p>
+        <button type="button" class="btn btn-primary" id="btnRunTests">Run classifier tests</button>
+        <div id="testResults" style="margin-top:1rem;"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /**
+     * Post-mortem generator: classifier keywords, root-cause patterns, report build.
+     * Optional API: POST /api/postmortem with JSON body; on failure, client-only path is used.
+     * AUTO MODE FEATURE: polling GET /api/logs, auto report, health badge (see comments below).
+     * PASTE / CODE AUTO ANALYSIS: debounced scan of pasted code/logs for failure signals → report.
+     */
+
+    // --- Classifier: keyword lists (matched case-insensitively in log + description) ---
+    const CLASSIFIER_RULES = {
+      coding: ["nullpointer", "typeerror", "undefined", "indexoutofbounds"],
+      config: ["env var", "connection refused", "missing key", "yaml"],
+      environment: ["outofmemory", "oom", "heap", "timeout", "disk full"],
+      performance: ["slow", "latency", "gc overhead", "cpu 100"],
+    };
+
+    /** Tie-break order when counts are equal */
+    const TYPE_PRIORITY = ["coding", "config", "environment", "performance"];
+
+    /**
+     * Classify failure type from combined text.
+     * @param {string} text
+     * @returns {string} one of coding | config | environment | performance
+     */
+    function classifyFailure(text) {
+      const hay = (text || "").toLowerCase();
+      const scores = {};
+      for (const type of TYPE_PRIORITY) scores[type] = 0;
+      for (const [type, keywords] of Object.entries(CLASSIFIER_RULES)) {
+        for (const kw of keywords) {
+          if (hay.includes(kw.toLowerCase())) scores[type]++;
+        }
+      }
+      let best = TYPE_PRIORITY[0];
+      let max = scores[best];
+      for (const t of TYPE_PRIORITY) {
+        if (scores[t] > max) {
+          max = scores[t];
+          best = t;
+        }
+      }
+      if (max === 0) return "coding";
+      return best;
+    }
+
+    /**
+     * Root cause engine: first matching pattern wins (order = more specific first where possible).
+     * @param {string} logText
+     * @returns {string} plain-English root cause
+     */
+    function inferRootCause(logText) {
+      const L = (logText || "").toLowerCase();
+      const patterns = [
+        { re: /nullpointer|null pointer|cannot read propert|undefined is not/i, cause: "A null or undefined value was dereferenced, indicating missing initialization, a failed guard, or an unexpected code path before use." },
+        { re: /typeerror|type error/i, cause: "A type mismatch or invalid operation on a value suggests incorrect assumptions about data shape or API contracts." },
+        { re: /traceback|file ".*", line \d+/i, cause: "A runtime error in script/Python-style code; use the traceback file/line references to locate the failing call stack." },
+        { re: /\bthrow\s+new\s+|\bthrow\s+[^;\n]+[;\n]/i, cause: "An explicit throw in source code rejected the current state—trace guards and inputs that lead to this branch." },
+        { re: /indexoutofbounds|array index/i, cause: "An index exceeded valid bounds, often from off-by-one logic, concurrent modification, or unchecked input size." },
+        { re: /connection refused|econnrefused/i, cause: "The client could not open a TCP connection; the target service may be down, mis-addressed, or blocked by network or firewall rules." },
+        { re: /missing key|env var|environment variable|yaml|parse error.*yaml/i, cause: "Configuration is incomplete or invalid—required keys, environment variables, or YAML structure may be missing or wrong for this environment." },
+        { re: /outofmemory|java\.lang\.outofmemoryerror|heap space|oom/i, cause: "The process exhausted available memory (heap or native), pointing to leaks, oversized payloads, or insufficient limits for the workload." },
+        { re: /timeout|timed out|deadline/i, cause: "An operation exceeded its time budget—downstream slowness, overload, or missing retries/backoff may be involved." },
+        { re: /disk full|no space left/i, cause: "The host or volume ran out of disk space, which can break writes, logs, and temp files." },
+        { re: /latency|slow query|gc overhead|cpu 100|high cpu/i, cause: "Observed latency or resource saturation suggests hot paths, inefficient queries, or GC/CPU pressure under load." },
+      ];
+      for (const { re, cause } of patterns) {
+        if (re.test(L)) return cause;
+      }
+      return "No strong pattern match in the log excerpt; correlate with deploy changes, dependencies, and recent config or data shifts.";
+    }
+
+    /** Count non-empty lines in log */
+    function countLogLines(logText) {
+      if (!logText || !logText.trim()) return 0;
+      return logText.split(/\r?\n/).filter((l) => l.trim().length).length;
+    }
+
+    /** Heuristic: lines that look like errors */
+    function countErrorLines(logText) {
+      if (!logText) return 0;
+      const errRe = /\b(error|exception|fatal|failed|failure|err:|e\d{3,})\b/i;
+      return logText.split(/\r?\n/).filter((l) => errRe.test(l)).length;
+    }
+
+    /** Used by badges, auto log mode, and paste detection */
+    function logsLookLikeFailure(logText) {
+      return (
+        countErrorLines(logText) > 0 ||
+        /\b(nullpointer|exception|error:|fatal|oom)\b/i.test(logText || "")
+      );
+    }
+
+    /**
+     * PASTE / CODE AUTO ANALYSIS — true if pasted text looks like a failure (logs, throws, traces, build/test errors).
+     * Used to auto-run the same post-mortem pipeline as “Generate report” without clicking.
+     */
+    function detectFailureSignals(text) {
+      if (!text || text.trim().length < 12) return false;
+      if (logsLookLikeFailure(text)) return true;
+      return /\b(throw\s+|new\s+Error\b|Traceback\s|SyntaxError|ReferenceError|TypeError|RangeError|EvalError|panic:|AssertionError|AssertionFailed|assert\s*\(\s*false|segmentation\s+fault|core\s+dumped|stderr:|exit\s+code\s*[1-9]|UnhandledPromise|ECONNREFUSED|EADDRINUSE|ENOMEM|npm\s+ERR!|Build\s+FAILED|TEST\s+FAILED|\bFAILED\b|:\s*error\s+(CS|TS)|fatal\s+error|UndefinedBehavior|SIG(SEGV|ABRT)|Caused\s+by:)\b/i.test(
+        text
+      );
+    }
+
+    function hashPasteContent(s) {
+      let h = 0;
+      for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+      return String(h);
+    }
+
+    function inferDescriptionFromPaste(raw) {
+      const lines = raw.split(/\r?\n/);
+      for (const line of lines) {
+        const L = line.trim();
+        if (!L) continue;
+        if (/\b(ERROR|WARN|FATAL|Exception|Error:|Traceback|throw|panic|failed|Failed:|ERR!)\b/i.test(L))
+          return L.slice(0, 200);
+      }
+      const first = lines.find((l) => l.trim());
+      return (first && first.trim().slice(0, 160)) || "Pasted content analyzed";
+    }
+
+    /** Four recommendations by classified type */
+    function recommendationsForType(type) {
+      const map = {
+        coding: [
+          "Add null checks or optional chaining at the failure site; align with API contracts.",
+          "Add or extend unit/integration tests covering the edge case that triggered the bug.",
+          "Enable stricter static analysis or types in the affected module.",
+          "Review recent commits touching the stack frame paths shown in the log.",
+        ],
+        config: [
+          "Document required env vars and secrets per environment; validate at startup.",
+          "Add config schema validation (e.g. for YAML/JSON) before applying settings.",
+          "Verify service discovery, ports, and credentials match the target environment.",
+          "Automate drift checks between staging and production configuration.",
+        ],
+        environment: [
+          "Review JVM/container memory limits and heap settings; capture heap dumps if OOM recurs.",
+          "Check disk, inode, and network health on affected nodes.",
+          "Tune timeouts and circuit breakers to match realistic downstream latency.",
+          "Scale out or throttle load if resource exhaustion correlates with traffic spikes.",
+        ],
+        performance: [
+          "Profile CPU and allocation hot paths; optimize queries and caching.",
+          "Review GC logs and heap sizing; reduce allocation churn where possible.",
+          "Add SLOs and alerting on latency percentiles for critical endpoints.",
+          "Consider async boundaries and backpressure for overloaded dependencies.",
+        ],
+      };
+      return map[type] || map.coding;
+    }
+
+    /** Simple timeline text (synthetic when no timestamps in log) */
+    function buildTimeline(bugId, description) {
+      const id = bugId || "UNKNOWN";
+      const desc = (description || "Failure detected").slice(0, 80);
+      return [
+        `T+0m  Incident opened (${id}): ${desc}`,
+        `T+15m Log aggregation and initial triage completed.`,
+        `T+45m Root cause hypothesis formed from logs and classifier.`,
+        `T+2h  Mitigation deployed or rollback executed; monitoring watch.`,
+      ].join("\n");
+    }
+
+    /**
+     * Build full report object for UI and export.
+     */
+    function buildReport(form) {
+      const combined = [form.description, form.log, form.testSummary].filter(Boolean).join("\n");
+      const type = classifyFailure(combined);
+      const rootCause = inferRootCause(form.log + "\n" + form.description);
+      const logLineCount = countLogLines(form.log);
+      const errorCount = countErrorLines(form.log);
+      const summary = (form.description || "").trim() || "No short description provided.";
+      return {
+        bugId: (form.bugId || "").trim() || "N/A",
+        severity: form.severity || "Med",
+        type,
+        rootCause,
+        summary,
+        timeline: buildTimeline(form.bugId, form.description),
+        recommendations: recommendationsForType(type),
+        logLineCount,
+        errorCount,
+        testSummary: (form.testSummary || "").trim(),
+        logExcerpt: form.log || "",
+        generatedAt: new Date().toISOString(),
+      };
+    }
+
+    /** Render report HTML */
+    function renderReportHtml(r) {
+      const typeLabel = r.type.charAt(0).toUpperCase() + r.type.slice(1);
+      return `
+        <div class="card">
+          <div class="badge">
+            <span>Type: ${escapeHtml(typeLabel)}</span>
+            <span>Severity: ${escapeHtml(r.severity)}</span>
+          </div>
+          <div class="metrics">
+            <div class="metric">Log lines <strong>${r.logLineCount}</strong></div>
+            <div class="metric">Error-like lines <strong>${r.errorCount}</strong></div>
+            <div class="metric">Bug ID <strong>${escapeHtml(r.bugId)}</strong></div>
+          </div>
+          <div class="report-section">
+            <h3>Summary</h3>
+            <p>${escapeHtml(r.summary)}</p>
+          </div>
+          <div class="report-section">
+            <h3>Root cause (inferred)</h3>
+            <p>${escapeHtml(r.rootCause)}</p>
+          </div>
+          <div class="report-section">
+            <h3>Timeline</h3>
+            <div class="timeline">${escapeHtml(r.timeline)}</div>
+          </div>
+          <div class="report-section">
+            <h3>Test summary</h3>
+            <p>${escapeHtml(r.testSummary || "—")}</p>
+          </div>
+          <div class="report-section">
+            <h3>Recommendations</h3>
+            <ul>${r.recommendations.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+          </div>
+          <div class="btn-group">
+            <button type="button" class="btn" id="btnDownloadTxt">Download .txt</button>
+            <button type="button" class="btn" id="btnDownloadJson">Download .json</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function escapeHtml(s) {
+      const div = document.createElement("div");
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function downloadText(filename, content, mime) {
+      const blob = new Blob([content], { type: mime || "text/plain;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    function reportToPlainText(r) {
+      const lines = [
+        "SOFTWARE FAILURE POST-MORTEM",
+        "============================",
+        `Bug ID: ${r.bugId}`,
+        `Severity: ${r.severity}`,
+        `Type: ${r.type}`,
+        "",
+        "SUMMARY",
+        r.summary,
+        "",
+        "ROOT CAUSE (INFERRED)",
+        r.rootCause,
+        "",
+        "TIMELINE",
+        r.timeline,
+        "",
+        "METRICS",
+        `Log line count: ${r.logLineCount}`,
+        `Error-like line count: ${r.errorCount}`,
+        "",
+        "TEST SUMMARY",
+        r.testSummary || "—",
+        "",
+        "RECOMMENDATIONS",
+        ...r.recommendations.map((x, i) => `${i + 1}. ${x}`),
+        "",
+        "LOG EXCERPT",
+        r.logExcerpt || "—",
+        "",
+        `Generated: ${r.generatedAt}`,
+      ];
+      return lines.join("\n");
+    }
+
+    // --- Preset samples ---
+    const SAMPLES = {
+      null: {
+        bugId: "BUG-NPE-001",
+        description: "Checkout service crashes when cart item has no SKU",
+        severity: "High",
+        log: `2024-03-10T14:22:01Z ERROR CheckoutService: NullPointerException at com.acme.CartLine.getSku(CartLine.java:42)
+java.lang.NullPointerException: Cannot invoke method on null
+\tat com.acme.CartLine.getSku(CartLine.java:42)
+\tat com.acme.CheckoutController.submit(CheckoutController.java:118)`,
+        testSummary: "Integration test submit_cart_missing_sku reproduced 500; unit tests for CartLine did not cover null SKU.",
+      },
+      db: {
+        bugId: "BUG-DB-044",
+        description: "API cannot reach primary database after deploy",
+        severity: "Crit",
+        log: `connection refused: connect ECONNREFUSED 10.0.4.12:5432
+missing key DATABASE_URL in environment
+app.yml: could not find expected key 'replica_host'`,
+        testSummary: "Smoke test failed on staging; health check red. Verified yaml valid but keys differ from prod template.",
+      },
+      oom: {
+        bugId: "BUG-OOM-009",
+        description: "Worker process killed during batch import",
+        severity: "Crit",
+        log: `java.lang.OutOfMemoryError: Java heap space
+GC overhead limit exceeded
+Heap dump written to /tmp/heap.hprof`,
+        testSummary: "Load test with 500k rows triggered OOM; baseline 50k rows passed.",
+      },
+    };
+
+    // AUTO MODE FEATURE — same healthy/failure strings as server; used when GET /api/logs fails
+    const AUTO_FALLBACK_HEALTHY = `2026-04-05T10:00:00Z INFO service: health check OK
+2026-04-05T10:00:05Z INFO service: heartbeat`;
+    const AUTO_FALLBACK_FAILURE = `Error: NullPointerException at line 42
+java.lang.NullPointerException: Cannot invoke method on null object reference`;
+
+    /** Optional API: try server enrichment; never required for UX */
+    async function tryOptionalApi(report) {
+      const statusEl = document.getElementById("apiStatus");
+      statusEl.hidden = false;
+      statusEl.classList.remove("ok");
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 2500);
+        const res = await fetch("/api/postmortem", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(report),
+          signal: ctrl.signal,
+        });
+        clearTimeout(t);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        statusEl.textContent = "API: report sent to server successfully (optional).";
+        statusEl.classList.add("ok");
+        return data;
+      } catch (e) {
+        statusEl.textContent = "API unavailable — using browser-only report (no action needed).";
+        return null;
+      }
+    }
+
+    // --- Tab UI ---
+    let lastReport = null;
+
+    function selectTab(name) {
+      document.querySelectorAll(".tab").forEach((btn) => {
+        const on = btn.dataset.tab === name;
+        btn.setAttribute("aria-selected", on);
+      });
+      document.querySelectorAll(".panel").forEach((p) => {
+        const on = p.id === `panel-${name}`;
+        p.classList.toggle("active", on);
+        p.hidden = !on;
+      });
+    }
+
+    document.querySelectorAll(".tab").forEach((btn) => {
+      btn.addEventListener("click", () => selectTab(btn.dataset.tab));
+    });
+
+    function readForm() {
+      return {
+        bugId: document.getElementById("bugId").value,
+        description: document.getElementById("description").value,
+        severity: document.getElementById("severity").value,
+        log: document.getElementById("log").value,
+        testSummary: document.getElementById("testSummary").value,
+      };
+    }
+
+    /** Wire download buttons after report HTML is injected */
+    function attachReportHandlers(report) {
+      document.getElementById("btnDownloadTxt").onclick = () => {
+        downloadText(`postmortem-${report.bugId.replace(/[^\w-]/g, "_")}.txt`, reportToPlainText(report));
+      };
+      document.getElementById("btnDownloadJson").onclick = () => {
+        downloadText(`postmortem-${report.bugId.replace(/[^\w-]/g, "_")}.json`, JSON.stringify(report, null, 2), "application/json");
+      };
+    }
+
+    /**
+     * Shared path: build report, render Report tab, optional POST /api/postmortem.
+     * Used by manual "Generate" and by AUTO MODE polling when logs change.
+     */
+    async function generateAndShowReport(form) {
+      lastReport = buildReport(form);
+      document.getElementById("reportEmpty").hidden = true;
+      const rc = document.getElementById("reportContent");
+      rc.hidden = false;
+      rc.innerHTML = renderReportHtml(lastReport);
+      attachReportHandlers(lastReport);
+      selectTab("report");
+      await tryOptionalApi(lastReport);
+    }
+
+    // PASTE / CODE AUTO ANALYSIS — debounced auto post-mortem when pasted text matches failure heuristics
+    let lastAutoAnalyzedPasteHash = "";
+    const PASTE_DEBOUNCE_MS = 900;
+    let pasteDebounceTimer = null;
+
+    function showPasteHint(msg) {
+      const el = document.getElementById("pasteDetectStatus");
+      if (el) el.textContent = msg || "";
+    }
+
+    function enrichFormFromPasteLog(raw) {
+      const bugIdEl = document.getElementById("bugId").value.trim();
+      const descEl = document.getElementById("description").value.trim();
+      const testEl = document.getElementById("testSummary").value.trim();
+      const severity = document.getElementById("severity").value;
+      return {
+        bugId: bugIdEl || "AUTO-PASTE-" + Date.now(),
+        description: descEl || inferDescriptionFromPaste(raw),
+        severity: severity || "Med",
+        log: raw,
+        testSummary:
+          testEl ||
+          "Auto-filled from pasted code/logs (browser-side pattern detection). Edit if needed.",
+      };
+    }
+
+    function mergePasteSuggestionsIntoDom(form) {
+      if (!document.getElementById("bugId").value.trim())
+        document.getElementById("bugId").value = form.bugId;
+      if (!document.getElementById("description").value.trim())
+        document.getElementById("description").value = form.description;
+      if (!document.getElementById("testSummary").value.trim())
+        document.getElementById("testSummary").value = form.testSummary;
+    }
+
+    async function runPasteAnalysis(force) {
+      if (autoMode) return;
+      const raw = document.getElementById("log").value;
+      if (!raw.trim()) {
+        showPasteHint("Paste code or logs first.");
+        return;
+      }
+      const autoChk = document.getElementById("autoFromPaste");
+      if (!force && autoChk && !autoChk.checked) return;
+
+      if (!force && !detectFailureSignals(raw)) {
+        showPasteHint(
+          "No failure patterns detected — add stderr, a stack trace, or throw/Error; or click “Analyze pasted content now”."
+        );
+        return;
+      }
+
+      const h = hashPasteContent(raw);
+      if (!force && h === lastAutoAnalyzedPasteHash) return;
+
+      showPasteHint(
+        force
+          ? "Generating post-mortem from pasted content…"
+          : "Failure patterns detected — generating post-mortem…"
+      );
+      const form = enrichFormFromPasteLog(raw);
+      mergePasteSuggestionsIntoDom(form);
+      await generateAndShowReport(readForm());
+      lastAutoAnalyzedPasteHash = h;
+      showPasteHint("Done. Use the Report tab to read or download .txt / .json.");
+    }
+
+    function schedulePasteAnalysis() {
+      if (autoMode) return;
+      const autoChk = document.getElementById("autoFromPaste");
+      if (!autoChk || !autoChk.checked) {
+        showPasteHint("");
+        return;
+      }
+      clearTimeout(pasteDebounceTimer);
+      pasteDebounceTimer = setTimeout(function () {
+        runPasteAnalysis(false);
+      }, PASTE_DEBOUNCE_MS);
+    }
+
+    document.querySelectorAll("[data-sample]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.sample;
+        const s = SAMPLES[key];
+        if (!s) return;
+        document.getElementById("bugId").value = s.bugId;
+        document.getElementById("description").value = s.description;
+        document.getElementById("severity").value = s.severity;
+        document.getElementById("log").value = s.log;
+        document.getElementById("testSummary").value = s.testSummary;
+        lastAutoAnalyzedPasteHash = "";
+        if (!autoMode) updateSystemBadge(s.log);
+        if (!autoMode && document.getElementById("autoFromPaste").checked) {
+          clearTimeout(pasteDebounceTimer);
+          pasteDebounceTimer = setTimeout(function () {
+            runPasteAnalysis(false);
+          }, 500);
+        }
+      });
+    });
+
+    document.getElementById("log").addEventListener("input", () => {
+      const v = document.getElementById("log").value;
+      if (!autoMode) updateSystemBadge(v);
+      schedulePasteAnalysis();
+    });
+
+    document.getElementById("autoFromPaste").addEventListener("change", function () {
+      if (this.checked) schedulePasteAnalysis();
+      else {
+        clearTimeout(pasteDebounceTimer);
+        showPasteHint("");
+      }
+    });
+
+    document.getElementById("btnAnalyzePaste").addEventListener("click", async function () {
+      clearTimeout(pasteDebounceTimer);
+      lastAutoAnalyzedPasteHash = "";
+      await runPasteAnalysis(true);
+    });
+
+    document.getElementById("btnGenerate").addEventListener("click", async () => {
+      const form = readForm();
+      await generateAndShowReport(form);
+    });
+
+    // ========== AUTO MODE FEATURE ==========
+    // Toggle Manual vs Auto: disables manual fields in Auto, shows Start Auto Detection.
+    let autoMode = false;
+    let autoMonitoring = false;
+    let pollTimer = null;
+    let lastLogsSnapshot = null;
+    let logsSourceLabel = "";
+
+    const POLL_MS = 5000;
+
+    const elModeToggle = document.getElementById("btnModeToggle");
+    const elAutoControls = document.getElementById("autoControls");
+    const elStartAuto = document.getElementById("btnStartAuto");
+    const elSystemBadge = document.getElementById("systemBadge");
+    const elLastScan = document.getElementById("lastScanTime");
+    const elAutoStatusLine = document.getElementById("autoStatusLine");
+    const elAutoStatusText = document.getElementById("autoStatusText");
+    const elMockTimeline = document.getElementById("autoMockTimeline");
+    const elAutoSteps = document.getElementById("autoSteps");
+
+    const manualIds = ["bugId", "severity", "description", "log", "testSummary"];
+    const sampleButtons = () => document.querySelectorAll("[data-sample]");
+    const btnGenerate = document.getElementById("btnGenerate");
+
+    function setManualInputsDisabled(disabled) {
+      manualIds.forEach((id) => {
+        document.getElementById(id).disabled = disabled;
+      });
+      sampleButtons().forEach((b) => {
+        b.disabled = disabled;
+      });
+      btnGenerate.disabled = disabled;
+      const ap = document.getElementById("btnAnalyzePaste");
+      const af = document.getElementById("autoFromPaste");
+      if (ap) ap.disabled = disabled;
+      if (af) af.disabled = disabled;
+      if (disabled) {
+        clearTimeout(pasteDebounceTimer);
+        showPasteHint("");
+      }
+    }
+
+    function stopAutoPolling() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      autoMonitoring = false;
+      elStartAuto.textContent = "Start Auto Detection";
+    }
+
+    function updateSystemBadge(logText) {
+      elSystemBadge.classList.remove("stable", "failure", "idle");
+      if (!autoMode) {
+        if (!(logText || "").trim()) {
+          elSystemBadge.textContent = "Idle";
+          elSystemBadge.classList.add("idle");
+          return;
+        }
+        if (logsLookLikeFailure(logText)) {
+          elSystemBadge.textContent = "Failure Detected";
+          elSystemBadge.classList.add("failure");
+        } else {
+          elSystemBadge.textContent = "System Stable";
+          elSystemBadge.classList.add("stable");
+        }
+        return;
+      }
+      if (!autoMonitoring) {
+        elSystemBadge.textContent = "Idle";
+        elSystemBadge.classList.add("idle");
+        return;
+      }
+      if (logsLookLikeFailure(logText)) {
+        elSystemBadge.textContent = "Failure Detected";
+        elSystemBadge.classList.add("failure");
+      } else {
+        elSystemBadge.textContent = "System Stable";
+        elSystemBadge.classList.add("stable");
+      }
+    }
+
+    function setAutoStatus(message) {
+      elAutoStatusLine.hidden = !autoMode || !autoMonitoring;
+      elAutoStatusText.textContent = message;
+    }
+
+    function updateLastScanTime() {
+      const t = new Date().toLocaleTimeString();
+      elLastScan.textContent = "Last scan: " + t;
+    }
+
+    /** AUTO MODE FEATURE — optional mock steps after each automated analysis */
+    function updateMockTimeline() {
+      if (!autoMode || !autoMonitoring) {
+        elMockTimeline.classList.remove("visible");
+        return;
+      }
+      const t = new Date().toLocaleTimeString();
+      elAutoSteps.innerHTML =
+        `<span>Detection</span> <span class="sep">→</span> ` +
+        `<span>${t}</span> <span class="sep">→</span> ` +
+        `<span>Analysis</span> <span class="sep">→</span> ` +
+        `<span>${t}</span> <span class="sep">→</span> ` +
+        `<span>Report</span> <span class="sep">→</span> ` +
+        `<span>${t}</span>`;
+      elMockTimeline.classList.add("visible");
+    }
+
+    /**
+     * Try GET /api/logs; on failure use local dummy logs (same 20s phase as server.js)
+     * so polling does not change text every 5s offline (avoids spamming reports).
+     */
+    async function fetchLogsFromApi() {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 3000);
+        const res = await fetch("/api/logs", { signal: ctrl.signal });
+        clearTimeout(t);
+        if (!res.ok) throw new Error("bad status");
+        const data = await res.json();
+        if (typeof data.logs !== "string") throw new Error("bad shape");
+        logsSourceLabel = "server";
+        return data.logs;
+      } catch (e) {
+        logsSourceLabel = "fallback";
+        const phase = Math.floor(Date.now() / 20000) % 2;
+        return phase === 0 ? AUTO_FALLBACK_HEALTHY : AUTO_FALLBACK_FAILURE;
+      }
+    }
+
+    /** Map ingested logs to a form object the existing buildReport() understands */
+    function formFromAutoLogs(logText) {
+      const firstLine = (logText || "").split(/\r?\n/).find((l) => l.trim()) || "Auto-detected event";
+      const errs = countErrorLines(logText);
+      let severity = "Med";
+      if (errs >= 2) severity = "High";
+      if (/\bcrit|fatal|nullpointer|outofmemory|oom\b/i.test(logText)) severity = "Crit";
+      return {
+        bugId: "AUTO-" + Date.now(),
+        description: firstLine.slice(0, 120),
+        severity,
+        log: logText,
+        testSummary: "Auto-ingested via " + logsSourceLabel + " (GET /api/logs or local fallback). Polling every " + POLL_MS / 1000 + "s.",
+      };
+    }
+
+    /**
+     * AUTO MODE FEATURE — poll loop body: fetch logs, compare to snapshot, re-run analysis if changed.
+     */
+    async function pollLogsOnce() {
+      if (!autoMonitoring || !autoMode) return;
+
+      setAutoStatus("Monitoring logs...");
+      const logsText = await fetchLogsFromApi();
+      updateLastScanTime();
+      updateSystemBadge(logsText);
+
+      const changed = lastLogsSnapshot !== logsText;
+      if (!changed) return;
+
+      lastLogsSnapshot = logsText;
+      document.getElementById("log").value = logsText;
+
+      if (logsLookLikeFailure(logsText)) {
+        setAutoStatus("New failure detected");
+      } else {
+        setAutoStatus("Monitoring logs... (log snapshot changed — regenerating report)");
+      }
+
+      const form = formFromAutoLogs(logsText);
+      await generateAndShowReport(form);
+
+      updateMockTimeline();
+      setAutoStatus("Monitoring logs...");
+    }
+
+    function applyModeUi() {
+      if (autoMode) {
+        elModeToggle.textContent = "Auto Mode";
+        elModeToggle.setAttribute("aria-pressed", "true");
+        elAutoControls.hidden = false;
+        setManualInputsDisabled(true);
+        elAutoStatusLine.hidden = !autoMonitoring;
+      } else {
+        elModeToggle.textContent = "Manual Mode";
+        elModeToggle.setAttribute("aria-pressed", "false");
+        elAutoControls.hidden = true;
+        stopAutoPolling();
+        lastLogsSnapshot = null;
+        setManualInputsDisabled(false);
+        elAutoStatusLine.hidden = true;
+        elMockTimeline.classList.remove("visible");
+        updateSystemBadge(document.getElementById("log").value);
+      }
+    }
+
+    elModeToggle.addEventListener("click", () => {
+      autoMode = !autoMode;
+      if (!autoMode) stopAutoPolling();
+      applyModeUi();
+    });
+
+    elStartAuto.addEventListener("click", () => {
+      if (autoMonitoring) {
+        stopAutoPolling();
+        setAutoStatus("");
+        elAutoStatusLine.hidden = true;
+        elMockTimeline.classList.remove("visible");
+        updateSystemBadge(document.getElementById("log").value);
+        return;
+      }
+      autoMonitoring = true;
+      elStartAuto.textContent = "Stop Auto Detection";
+      lastLogsSnapshot = null;
+      elAutoStatusLine.hidden = false;
+      setAutoStatus("Monitoring logs...");
+
+      pollLogsOnce();
+      pollTimer = setInterval(pollLogsOnce, POLL_MS);
+    });
+
+    applyModeUi();
+
+    // --- Unit tests (classifier) ---
+    function runClassifierTests() {
+      const cases = [
+        {
+          name: "Null pointer log → coding",
+          text: "java.lang.NullPointerException at com.foo.Bar undefined ref",
+          expect: "coding",
+        },
+        {
+          name: "DB / config keywords → config",
+          text: "connection refused missing key in yaml env var not set",
+          expect: "config",
+        },
+        {
+          name: "OOM / heap → environment",
+          text: "OutOfMemoryError heap oom timeout disk full",
+          expect: "environment",
+        },
+      ];
+
+      const rows = cases.map((c) => {
+        const got = classifyFailure(c.text);
+        const ok = got === c.expect;
+        return `<div class="test-row"><span>${escapeHtml(c.name)}</span><span class="${ok ? "pass" : "fail"}">${ok ? "PASS" : "FAIL"} (${escapeHtml(got)} vs ${escapeHtml(c.expect)})</span></div>`;
+      });
+
+      document.getElementById("testResults").innerHTML = rows.join("");
+    }
+
+    document.getElementById("btnRunTests").addEventListener("click", runClassifierTests);
+  </script>
+</body>
+</html>
